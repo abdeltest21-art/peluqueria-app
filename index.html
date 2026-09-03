@@ -385,33 +385,45 @@ function toast(msg){
 }
 
 /* ---------- API layer ---------- */
-async function fetchWithRetry(url, opts, tries = 3){
+// Apps Script Web Apps devuelven una redirección 302 hacia googleusercontent.com.
+// fetch() a veces la bloquea por CORS en el salto intermedio. XMLHttpRequest maneja
+// esa redirección de forma nativa en el navegador y evita ese bloqueo.
+function xhrCall(method, url, body){
+  return new Promise((resolve, reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    if (method === 'POST') xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+    xhr.onload = function(){
+      if (xhr.status >= 200 && xhr.status < 300){
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch(e){ reject(new Error('Respuesta no es JSON válido: ' + xhr.responseText.slice(0,200))); }
+      } else {
+        reject(new Error('HTTP ' + xhr.status));
+      }
+    };
+    xhr.onerror = function(){ reject(new Error('Error de red al llamar a Apps Script')); };
+    xhr.send(body || null);
+  });
+}
+async function fetchWithRetry(method, url, body, tries = 3){
   let lastErr;
   for (let i = 0; i < tries; i++){
     try{
-      const res = await fetch(url, opts);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return await res.json();
+      return await xhrCall(method, url, body);
     } catch(err){
       lastErr = err;
-      // Los redirect de Apps Script a veces fallan una vez por CORS transitorio; reintentar ayuda.
       await new Promise(r => setTimeout(r, 400 * (i + 1)));
     }
   }
   throw lastErr;
 }
 async function apiGet(){
-  const json = await fetchWithRetry(API_URL + '?action=all', { method:'GET', redirect:'follow' });
+  const json = await fetchWithRetry('GET', API_URL + '?action=all');
   if (!json.ok) throw new Error(json.error || 'error desconocido');
   return json;
 }
 async function apiPost(body){
-  const json = await fetchWithRetry(API_URL, {
-    method:'POST',
-    redirect:'follow',
-    headers:{'Content-Type':'text/plain;charset=utf-8'}, // evita preflight OPTIONS en Apps Script
-    body: JSON.stringify(body)
-  });
+  const json = await fetchWithRetry('POST', API_URL, JSON.stringify(body));
   if (!json.ok) throw new Error(json.error || 'error desconocido');
   return json;
 }
